@@ -8,7 +8,7 @@ using DataFrames
 import DataFrames.groupby
 
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
-
+typealias QueryableGroup Union(GroupedDataFrame, GroupApplied)
 
 # ---------------------------------------------------------
 # GROUPBY
@@ -29,7 +29,7 @@ Base.select(cols::Vector{Symbol}, df::AbstractDataFrame) = df[:, cols]
 Base.select(cols::Vector{Symbol}) = df::Queryable -> select(cols, df)
 select(cols::Symbol...) = select([cols...])
 
-Base.select(cols::Vector{Symbol}, dfs::GroupedDataFrame) = map(select(cols), dfs)
+oBase.select(cols::Vector{Symbol}, dfs::GroupedDataFrame) = map(select(cols), dfs)
 
 
 # ---------------------------------------------------------
