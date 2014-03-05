@@ -72,9 +72,9 @@ function update(assignment::Expr, df::AbstractDataFrame)
     newdf
 end
 
-function update!(assigment::Expr, df::AbstractDataFrame)
-    assigment.head == :(=) ? nothing : error("Expression must be an assigment.")
-    lhs, rhs = assigment.args
+function update!(assignment::Expr, df::AbstractDataFrame)
+    assignment.head == :(=) ? nothing : error("Expression must be an assignment.")
+    lhs, rhs = assignment.args
     val = parse_df_expr(rhs, df) |> eval
     setindex!(df, val, lhs)
 end
@@ -88,7 +88,7 @@ function update(assignment_vector::Vector{Expr}, df::AbstractDataFrame)
 end
 
 update(assignment::Expr) = (df::AbstractDataFrame) -> update(assignment, df)
-update!(assignment::Expr) = (df::AbstractDataFrame) -> update!(assigment, df)
+update!(assignment::Expr) = (df::AbstractDataFrame) -> update!(assignment, df)
 
 update(assignment_vector::Vector{Expr}) =
     df::Union(AbstractDataFrame) -> update(assignment_vector, df)
@@ -98,7 +98,7 @@ update(assignments::Expr...) = update([assignments...])
 # WHERE
 # ---------------------------------------------------------
 function where(condition::Expr, df::AbstractDataFrame)
-    condition.head == :(=) ? error("Cannot filter on an assigment.") : nothing
+    condition.head == :(=) ? error("Cannot filter on an assignment.") : nothing
     val = parse_df_expr(condition, df) |> eval
     typeof(val) <: AbstractArray{Bool} ? nothing :
         error("Filter condition expression must evaluate to a boolean vector.")
@@ -129,7 +129,7 @@ where(conditions::Expr...) = where([conditions...])
 # ---------------------------------------------------------
 function aggregate(assignment::Expr, df::AbstractDataFrame)
     assignment.head == :(=) ? nothing :
-        error("Aggregation must be an assigment expression.")
+        error("Aggregation must be an assignment expression.")
     lhs, rhs = assignment.args
     aggdf = DataFrame()
     val = parse_df_expr(rhs, df) |> eval
