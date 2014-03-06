@@ -8,32 +8,33 @@ module Queries
 
 using DataFrames
 
-typalias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
+typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
+typealias QueryExpr Union(Expr, Symbol)
 
 type Query
     funs::Vector{Function}
-    exprs::Vector{Expr}
+    exprs::Vector{QueryExpr}
 end
 
 # New constructors
-query(fs::Vector{Fuction}, exs::Vector{Expr}) = Query(fs, exs)
-query(f::Function, ex::Expr) = Query([f], [ex])
+query(fs::Vector{Function}, exs::Vector{QueryExpr}) = Query(fs, exs)
+query(f::Function, ex::QueryExpr) = Query([f], [ex])
 
 # Copy constructor
 query(q::Query) = query(q.funs, q.exprs)
+Base.copy(q::Query) = query(q)
 
-# ---------------------------------------------------------                                                          
+# ---------------------------------------------------------
 # Query composition. |> connects two queries sequentially.
 # ---------------------------------------------------------
 function Base.|>(q1::Query, q2::Query)
     query([q1.funs, q2.funs], [q1.exprs, q2.exprs])
 end
 
-
 # ---------------------------------------------------------
 # User-facing query functions create instances of Query
 # ---------------------------------------------------------
-select(ex::Expr) = query(qselect, ex)
+Base.select(ex::Symbol) = query(qselect, ex)
 
 where(ex::Expr) = query(qwhere, ex)
 
@@ -52,13 +53,13 @@ function qselect(ex::Expr, df::Queryable)
     nothing
 end
 
-function qselect(ex::Expr) = df::Queryable -> qselect(ex, df)
+qselect(ex::Expr) = df::Queryable -> qselect(ex, df)
 
 function qwhere(ex::Expr, df::Queryable)
     nothing
 end
 
-function qwhere(ex::Expr) = df::Queryable -> qwhere(ex, df)
+qwhere(ex::Expr) = df::Queryable -> qwhere(ex, df)
     
 function qgroubpy(ex::Expr, df::Queryable)
     nothing
@@ -70,7 +71,9 @@ function qaggregate(ex::Expr, df::Queryable)
     nothing
 end
 
-qaggregate(ex::Expr) = 
+function qaggregate(ex::Expr)
+    nothing
+end
 
 function qupdate(ex::Expr, df::Queryable)
     nothing
@@ -90,12 +93,59 @@ macro query(df, qry)
 
     # Resolve column names in the query's expressions.
     exprs = [ex -> parse_query_expression(ex, df) for ex in qry.exprs]
-   
+    exprs
 end
 
-function parse_query_expression(ex::Expr, df::Queryable)
-    nothing
+function parse_query_expression(ex::QueryExpr, df::Queryable)
+    function expand_nodes(ex, df)
+        for (i, arg) in enumerate(ex.args)
+            if isa(arg, Symbol)
+                if arg in names(df)
+                    expanded_expr = Expr(:call, :getindex, df, QuoteNode(:($arg)))
+                    setindex!(ex.args, expanded_expr, i)
+                end
+            elseif isa(arg, Expr)
+                expand_nodes(arg, df)
+            else
+                continue
+            end
+        end
+        ex
+    end
+
+    newexpr = copy(ex)
+    expand_nodes(newexpr, df)
+    newexpr
 end
 
 
 end # module
+
+
+## # ---------------------------------------------------------
+## # PARSING DATAFRAME EXPRESSIONS
+## #
+## # TODO: This will probably break if the expression contains
+## # a getitem call to a same-named column in another DataFrame
+## # ---------------------------------------------------------
+## function parse_df_expr(dfexpr::Expr, df::AbstractDataFrame)
+##     function expand_nodes(ex, df)
+##         for (i, arg) in enumerate(ex.args)
+##             if isa(arg, Symbol)
+##                 if arg in names(df)
+##                     expanded_expr = Expr(:call, :getindex, df, QuoteNode(:($arg)))
+##                     setindex!(ex.args, expanded_expr, i)
+##                 end
+##             elseif isa(arg, Expr)
+##                 expand_nodes(arg, df)
+##             else
+##                 continue
+##             end
+##         end
+##         ex
+##     end
+
+##     newexpr = copy(dfexpr)
+##     expand_nodes(newexpr, df)
+##     newexpr
+## end 

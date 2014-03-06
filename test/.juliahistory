@@ -1,0 +1,25 @@
+methods(Q.query)
+q1.funs
+q1.exprs
+q3.funs
+q3.funs
+q3.exprs
+@myassert 10 2*5
+@myassert 10 2*5
+myassert(:(10), :(5*2))
+myassert(:(10), :(5*4))
+ ex = :(x = 10 + 10)
+ex.args
+ ex = :(x = 10 + :x)
+ex.args
+ex.args[2].args
+ex.args[2].args[2]
+ex.args[2].args[3]
+typeof(ex.args[2].args[3])
+:(10)
+:(:(10))
+typeof(:(10))
+typeof(:(x = 10))
+typeof(:(x))
+typeof(:(:x))
+typeof(:(:10))
