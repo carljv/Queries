@@ -66,22 +66,19 @@ end
 
 |>(q1::Query, q2::Query) = Query([q1.qps, q2.qps])
 
-macro ?(ex)
+macro ?(exs...)
     make_dfx = function(e)
         expr_type = classify_query_expression(e)
         parser = df -> eval(parse_query_expression(e, df))
         DFExpr(parser, e, expr_type) 
     end  
-    make_dfx(ex)
+   if length(exprs) > 1
+       collect(map(make_dfx, exs...))
+   else
+       [make_dfx(exs..)]
+   end
 end
-   
-   # if length(exprs) > 1
-   #     collect(map(makequery, exprs))
-   # else
-   #     [makequery(exprs...)]
-   # end
-#end
-####################
+
 
 function classify_query_expression(ex::ExpressesQuery)
     invalid_expr_error = () -> error("Not a valid query expression: $ex")
