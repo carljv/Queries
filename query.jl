@@ -4,148 +4,250 @@
 # C. Vogel       March 2014                                                   #
 # --------------------------------------------------------------------------- #
 
-module Queries
+module JQ
+export @?, update, select, where, groupby, aggregate, sortby, show
+
 
 using DataFrames
 
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
-typealias QueryExpr Union(Expr, Symbol)
+typealias ExpressesQuery Union(Expr, Symbol)
+
+# A DataFrame expression is an expression that references a dataframe's columns,
+# and, when matched with a query term (select, where, groupby, ...) creates
+# and executable query that can be matched with a DataFrame.
+#
+# A DFExpr is created by the @? macro. 
+#
+# Fields:
+# -------
+# *parser* an anonymous function that takes a dataframe, and resolves column
+# names from that dataframe referred to in the expression. 
+# *expr* the unresolved query expression
+# *expr_type* one of (:columns, :assignment, :condition).
+#    - :columns is a list of columns in a dataframe. Ex: A, X, Col10
+#      - used in select and groupby queries
+#    - :assignment is an assignment intended to create a new varialbe or replace
+#      an existing one. Ex: C = B + f(A, D)).
+#    - :condition is an expression that should return a boolean array when evaluated.
+#      Ex: X .> Y, isnull(Z)
+type DFExpr
+    parser::Function
+    expr::ExpressesQuery
+    expr_type::Symbol
+end
+
+Base.show(q::DFExpr) = println(ucfirst(string(q.expr_type)), " expression: $(q.expr)")
+
+function Base.show(io::IO, qs::Vector{DFExpr})
+    println(length(qs), "-element Array{$(eltype(qs)), 1}:")
+    for q in qs
+        print("    ")
+        show(io::IO, q)
+    end
+end
+
+typealias QueryPair (Symbol, Vector{DFExpr})
 
 type Query
-    funs::Vector{Function}
-    exprs::Vector{QueryExpr}
+    qps::Vector{QueryPair}
 end
 
-# New constructors
-query(fs::Vector{Function}, exs::Vector{QueryExpr}) = Query(fs, exs)
-query(f::Function, ex::QueryExpr) = Query([f], [ex])
+Query(s::Symbol, qs::Vector{DFExpr}) = Query([(s, qs)])
 
-# Copy constructor
-query(q::Query) = query(q.funs, q.exprs)
-Base.copy(q::Query) = query(q)
-
-# ---------------------------------------------------------
-# Query composition. |> connects two queries sequentially.
-# ---------------------------------------------------------
-function Base.|>(q1::Query, q2::Query)
-    query([q1.funs, q2.funs], [q1.exprs, q2.exprs])
+function Base.show(io::IO, cq::Query)
+    for qp in cq.qps
+        println(" ", uppercase(string(qp[1])))
+        for q in qp[2]
+            println("      $(q.expr)")
+        end
+    end
 end
 
-# ---------------------------------------------------------
-# User-facing query functions create instances of Query
-# ---------------------------------------------------------
-Base.select(ex::Symbol) = query(qselect, ex)
+|>(q1::Query, q2::Query) = Query([q1.qps, q2.qps])
 
-where(ex::Expr) = query(qwhere, ex)
+macro ?(ex)
+    make_dfx = function(e)
+        expr_type = classify_query_expression(e)
+        parser = df -> eval(parse_query_expression(e, df))
+        DFExpr(parser, e, expr_type) 
+    end  
+    make_dfx(ex)
+end
+   
+   # if length(exprs) > 1
+   #     collect(map(makequery, exprs))
+   # else
+   #     [makequery(exprs...)]
+   # end
+#end
+####################
 
-DataFrames.groupby(ex::Expr) = query(qgroupby, ex)
-
-aggregate(ex::Expr) = query(qaggregate, ex)
-
-update(ex::Expr) = query(qupdate, ex)
-
-
-# ---------------------------------------------------------
-# Internal qfunctions actually perform queries on resolved
-# dataframe expressions
-# ---------------------------------------------------------
-function qselect(ex::Expr, df::Queryable)
-    nothing
+function classify_query_expression(ex::ExpressesQuery)
+    invalid_expr_error = () -> error("Not a valid query expression: $ex")
+    if isa(ex, Symbol)
+        :columns        
+    elseif ex.head == :tuple
+        if all(map(typeof, ex.args) .== Symbol)
+            :columns
+        else
+            invalid_expr_error()
+        end
+    elseif ex.head == :(=)
+        if typeof(ex.args[1]) == Symbol
+            :assignment
+        else
+            invalid_expr_error()
+        end
+        
+    elseif ex.head in (:comparison, :call)
+        :conditional
+    else
+        invalid_expr_error()
+    end
 end
 
-qselect(ex::Expr) = df::Queryable -> qselect(ex, df)
+# Query expression predicates make sure that proper query
+# expressions are passed to query functions.
+is_columns(q::DFExpr)    = is(q.expr_type, :columns)
+is_assignment(q::DFExpr) = is(q.expr_type, :assignment)
+is_condition(q::DFExpr)  = is(q.expr_type, :conditional)
 
-function qwhere(ex::Expr, df::Queryable)
-    nothing
+
+# Query functions construct Queries
+function update(qs::Vector{DFExpr})
+    all(map(is_assignment, qs)) ? nothing :
+        error("Update query require assignment expressions.")
+    Query(:update, qs)
 end
 
-qwhere(ex::Expr) = df::Queryable -> qwhere(ex, df)
-    
-function qgroubpy(ex::Expr, df::Queryable)
-    nothing
+function Base.select(qs::Vector{DFExpr})
+    all(map(is_columns, qs)) ? nothing :
+        error("Select query requires columns.")
+    Query(:select, qs)
 end
 
-qgroubpy(ex::Expr) = df::Queryable -> qgroupby(ex, df)
-
-function qaggregate(ex::Expr, df::Queryable)
-    nothing
+function where(qs::Vector{DFExpr})
+    all(map(is_condition, qs)) ? nothing :
+        error("Where query requires condition expressions.")
+    Query(:where, qs)
 end
 
-function qaggregate(ex::Expr)
-    nothing
+function groupby(qs::Vector{DFExpr})
+    all(map(is_columns, qs)) ? nothing:
+        error("Groupby query requires column expressions.")
+    Query(:groupby, qs)
 end
 
-function qupdate(ex::Expr, df::Queryable)
-    nothing
+function aggregate(qs::Vector{DFExpr})
+    all(map(is_assignment, qs)) ? nothing :
+        error("Aggregate query requires assignment expressions.")
+    Query(:aggregate, qs)
 end
 
-# ---------------------------------------------------------
-# The @query macro executes a Query on a DataFrame,
-# resolving column references in the Query's expressions,
-# then executing each query function with the associated
-# expression.
-# ---------------------------------------------------------
-
-macro query(df, qry)
-    qry = eval(qry)
-    isa(qry, Query) ? nothing :
-        error("Second argument to query must be, or evaluate to, type Query.")
-
-    # Resolve column names in the query's expressions.
-    exprs = [ex -> parse_query_expression(ex, df) for ex in qry.exprs]
-    exprs
+function sortby(qs::Vector{DFExpr})
+    all(map(is_columns, qs)) ? nothing :
+        error("Sortby query requires column expressions.")
+    Query(:sortby, qs)
 end
 
-function parse_query_expression(ex::QueryExpr, df::Queryable)
-    function expand_nodes(ex, df)
-        for (i, arg) in enumerate(ex.args)
+#qfmap = {
+#    :update    => qryupdate,
+#    :select    => qryselect,
+#    :where     => qrywhere,
+#    :groupby   => qrygroupby,
+#    :aggregate => qryaggregate,
+#    :sortby    => qrysortby
+#}
+
+
+function parse_query_expression(expr::ExpressesQuery, df::Queryable)
+    # Resolve all names.
+    function expand_column_refs(expr)
+        for (i, arg) in enumerate(expr.args)
             if isa(arg, Symbol)
                 if arg in names(df)
-                    expanded_expr = Expr(:call, :getindex, df, QuoteNode(:($arg)))
-                    setindex!(ex.args, expanded_expr, i)
+                    expanded = Expr(:ref, df, QuoteNode(arg))
+                    setindex!(expr.args, expanded, i)
                 end
             elseif isa(arg, Expr)
-                expand_nodes(arg, df)
+                expand_column_refs(arg)
             else
                 continue
             end
         end
-        ex
+        expr
     end
-
-    newexpr = copy(ex)
-    expand_nodes(newexpr, df)
-    newexpr
+    newexpr = copy(expr)
+    expr_type = classify_query_expression(newexpr)
+    if is(expr_type, :assignment)
+        lhs, rhs = newexpr.args
+        isa(lhs, Symbol) ? nothing: error("LHS of an assignment must be a valid column name.")
+        Expr(:(=), Expr(:ref, df, QuoteNode(lhs)), expand_column_refs(newexpr))        
+    else
+        expand_column_refs(newexpr)
+    end
 end
 
 
-end # module
+
+### TEST MACRO
+macro cool(ex)
+   esc(:(() -> eval($ex)))
+end
+
+end # Module
 
 
-## # ---------------------------------------------------------
-## # PARSING DATAFRAME EXPRESSIONS
-## #
-## # TODO: This will probably break if the expression contains
-## # a getitem call to a same-named column in another DataFrame
-## # ---------------------------------------------------------
-## function parse_df_expr(dfexpr::Expr, df::AbstractDataFrame)
-##     function expand_nodes(ex, df)
-##         for (i, arg) in enumerate(ex.args)
-##             if isa(arg, Symbol)
-##                 if arg in names(df)
-##                     expanded_expr = Expr(:call, :getindex, df, QuoteNode(:($arg)))
-##                     setindex!(ex.args, expanded_expr, i)
-##                 end
-##             elseif isa(arg, Expr)
-##                 expand_nodes(arg, df)
-##             else
-##                 continue
-##             end
-##         end
-##         ex
-##     end
 
-##     newexpr = copy(dfexpr)
-##     expand_nodes(newexpr, df)
-##     newexpr
-## end 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+
+
+                # ------------------------------ #
+                # Now let's draw a TIE Fighter!  #
+                # ------------------------------ #
+                #    .             *         .   #
+                #       *   /  _  \      *       #
+                #   *       |=|_|=|     *     *  #
+                # *     *   \     /        .     #
+                #    .                *          #
+                #        *     .            *    #
+                # ------------------------------ #
+     
+ 
