@@ -11,7 +11,7 @@ export @?, update, select, where, groupby, aggregate, sortby, show
 using DataFrames
 
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
-typealias ExpressesQuery Union(Expr, Symbol)
+typealias ColumnExpression Union(Expr, Symbol)
 
 # A DataFrame expression is an expression that references a dataframe's columns,
 # and, when matched with a query term (select, where, groupby, ...) creates
@@ -33,8 +33,13 @@ typealias ExpressesQuery Union(Expr, Symbol)
 #      Ex: X .> Y, isnull(Z)
 type DFExpr
     parser::Function
-    expr::ExpressesQuery
+    expr::ColumnExpression
     expr_type::Symbol
+end
+
+
+function DFExpr(e::ColumnExpression)
+    DFExpr(() -> nothing, e, classify_query_expression(e))
 end
 
 Base.show(q::DFExpr) = println(ucfirst(string(q.expr_type)), " expression: $(q.expr)")
@@ -66,21 +71,30 @@ end
 
 |>(q1::Query, q2::Query) = Query([q1.qps, q2.qps])
 
-macro ?(exs...)
-    make_dfx = function(e)
-        expr_type = classify_query_expression(e)
-        parser = df -> eval(parse_query_expression(e, df))
-        DFExpr(parser, e, expr_type) 
-    end  
-   if length(exprs) > 1
-       collect(map(make_dfx, exs...))
-   else
-       [make_dfx(exs..)]
-   end
+macro ?(ex)
+    ex_type = classify_query_expression(ex)
+    parser = df -> eval(parse_query_expression(ex, df))
+    DFExpr(parser, ex, ex_type) 
+end
+    
+#    if length(exprs) > 1
+#       collect(map(make_dfx, exs...))
+#   else
+#       [make_dfx(exs..)]
+#   end
+#end
+
+### TEST MACRO
+macro cool(dfexpr)
+   esc( :($dfexpr.parser = () -> eval($dfexpr.expr)) )
 end
 
+macro lame(ex)
+    () -> eval(ex)
+end
 
-function classify_query_expression(ex::ExpressesQuery)
+    
+function classify_query_expression(ex::ColumnExpression)
     invalid_expr_error = () -> error("Not a valid query expression: $ex")
     if isa(ex, Symbol)
         :columns        
@@ -158,7 +172,7 @@ end
 #}
 
 
-function parse_query_expression(expr::ExpressesQuery, df::Queryable)
+function parse_query_expression(expr::ColumnExpression, df::Queryable)
     # Resolve all names.
     function expand_column_refs(expr)
         for (i, arg) in enumerate(expr.args)
@@ -179,8 +193,9 @@ function parse_query_expression(expr::ExpressesQuery, df::Queryable)
     expr_type = classify_query_expression(newexpr)
     if is(expr_type, :assignment)
         lhs, rhs = newexpr.args
-        isa(lhs, Symbol) ? nothing: error("LHS of an assignment must be a valid column name.")
-        Expr(:(=), Expr(:ref, df, QuoteNode(lhs)), expand_column_refs(newexpr))        
+        isa(lhs, Symbol) ? nothing:
+            error("LHS of an assignment must be a valid column name.")
+        Expr(:(=), Expr(:ref, df, QuoteNode(lhs)), expand_column_refs(newexpr))
     else
         expand_column_refs(newexpr)
     end

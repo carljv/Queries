@@ -3,7 +3,8 @@
 #
 # C. Vogel       March 2014
 # -----------------------------------------------------------------------------
-
+module Queries
+export groupby, select, update, where, aggregate
 using DataFrames
 import DataFrames.groupby
 
@@ -27,9 +28,9 @@ groupby(cols::Symbol...) = groupby([cols...])
 Base.select(cols::Vector{Symbol}, df::AbstractDataFrame) = df[:, cols]
 
 Base.select(cols::Vector{Symbol}) = df::Queryable -> select(cols, df)
-select(cols::Symbol...) = select([cols...])
+Base.select(cols::Symbol...) = select([cols...])
 
-oBase.select(cols::Vector{Symbol}, dfs::GroupedDataFrame) = map(select(cols), dfs)
+Base.select(cols::Vector{Symbol}, dfs::GroupedDataFrame) = map(select(cols), dfs)
 
 
 # ---------------------------------------------------------
@@ -166,27 +167,4 @@ aggregate(assignment_vector::Vector{Expr}) =
 
 aggregate(assignments::Expr...) = aggregate([assignments...])
 
-
-# ---------------------------------------------------------
-# TEST CASE
-# ---------------------------------------------------------
-
-using Datetime
-
-const googurl = "http://ichart.finance.yahoo.com/table.csv?s=GOOG&a=07&b=19&c=2004&d=02&e=5&f=2014&g=d&ignore=.csv"
-
-
-data =
-googurl |>
-    download |>
-    open |>
-    readtable |>
-    update(:(Date  = map(date, Date)),
-           :(Year  = map(year, Date)),
-           :(Month = map(month, Date)),
-           :(Spread = High - Low)) |>
-    groupby(:Year, :Month) |>
-    where(:(Volume .>= quantile(Volume, .75))) |>
-    aggregate(:(AvgVolume = mean(Volume)),
-              :(AvgSpread = mean(Spread)))
-               
+end #module
