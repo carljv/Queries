@@ -5,6 +5,7 @@
 # --------------------------------------------------------------------------- #
 module JQ
 using DataFrames
+export query, where, select, @?
 
 # Some notes
 # ----------
@@ -103,6 +104,8 @@ function query(cq::CompositeQuery, df)
     foldl(|>, df, qfuncs)
 end
 
+query(cq::CompositeQuery) = df::Queryable -> query(cq, df)
+    
 # This macro returns a QueryExpr type, which is a (Function, ColumnExpr) pair.  
 macro ?(exs...)
     esc(:([(df -> eval(JQ.parse_col_expression(ex, df)), ex) for ex in $exs]))
