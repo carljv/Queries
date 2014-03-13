@@ -5,12 +5,8 @@
 # --------------------------------------------------------------------------- #
 module JQ
 using DataFrames
-export query, where, select, @?
+export query, where, select, @?, show, parse_col_expression
 
-# Some notes
-# ----------
-# 1. Queries CANNOT mutate the argument dataframe.
-# 2. Macro or function taking expression should create a Query type
 typealias ColumnExpr Union(Symbol, Expr)
 typealias ParserVector Vector{(Function, Expr)}
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
@@ -22,26 +18,52 @@ type Query
     qtype::Symbol
 end
 
+function Base.show(io::IO, q::Query; firstrow=true)
+    exmargin = length(string(q.qtype)) + 1
+    if firstrow
+        print("   ", uppercase(string(q.qtype))) 
+        print(" $(q.ex)\n")
+    else
+        println((" " ^ exmargin) * "$(q.ex)")
+    end
+end
+
+Base.show(io::IO, q::Query) = show(io, q, firstrow=true)
+
 typealias CompositeQuery Vector{Query}
+
+function Base.show(io::IO, qs::CompositeQuery)
+    println("Query:")
+    prevq = None
+    for q in qs
+        if q.qtype != prevq
+            show(q, firstrow=true)
+        else
+            show(q, firstrow=false)
+        end
+        prevq = q.qtype
+    end
+end
 
 # Construct array of Query-s from a vector of query expressions.
 # This is a *CompositeQuery*.
 # qtype is one of :select, :where, :groupby, :aggregate, :sortby, etc.
-function make_queries(qs::ParserCollection, qtype::Symbol)
+function make_queries(qs::ParserVector, qtype::Symbol)
     [Query(q[1], q[2], classify_col_expression(q[2]), qtype) for q in qs]
-    end
+end
 
 # Composing queries. |> just becomes a Vector append
 |>(cq1::CompositeQuery, cq2::CompositeQuery) = [cq1, cq2]
 
     
 # Query functions are thin wrappers around the Query type constructor.
-# TODO: Add checks that expressions are consistent with the query function. where(qs::ParserCollection)              = make_queries(qs, :where)
-Base.select(qs::ParserCollection)        = make_queries(qs, :select)
-update(qs::ParserCollection)             = make_queries(qs, :update)
-sortby(qs::ParserCollection)             = make_queries(qs, :sortby)
-DataFrames.groupby(qs::ParserCollection) = make_queries(qs, :groupby)
-aggregate(qs::ParserCollection)          = make_queries(qs, :aggregate)
+# TODO: Add checks that expressions are consistent with the query function.
+where(qs::ParserVector)              = make_queries(qs, :where)
+Base.select(qs::ParserVector)        = make_queries(qs, :select)
+update(qs::ParserVector)             = make_queries(qs, :update)
+sortby(qs::ParserVector)             = make_queries(qs, :sortby)
+DataFrames.groupby(qs::ParserVector) = make_queries(qs, :groupby)
+aggregate(qs::ParserVector)          = make_queries(qs, :aggregate)
 
 
 # Executable query functions (Query, Queryable) -> Queryable
@@ -103,11 +125,11 @@ function query(cq::CompositeQuery, df)
     foldl(|>, df, qfuncs)
 end
 
-query(cq::CompositeQuery) = df::Queryable -> query(cq, df),
+query(cq::CompositeQuery) = df::Queryable -> query(cq, df)
     
-# This macro returns a ParserCollection type, which is a (Function, ColumnExpr) pair.  
+# This macro returns a ParserVector type, which is a (Function, ColumnExpr) pair.  
 macro ?(exs...)
-    esc(:([(df -> eval(JQ.parse_col_expression(ex, df)), ex) for ex in $exs]))
+    esc(:([(df -> eval(parse_col_expression(ex, df)), ex) for ex in $exs]))
 end
 
 function classify_col_expression(ex::Expr)
