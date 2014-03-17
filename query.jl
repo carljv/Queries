@@ -7,6 +7,7 @@ module JQ
 using DataFrames
 export query, where, select, @?, show, parse_col_expression
 
+
 typealias ColumnExpr Union(Symbol, Expr)
 typealias ParserVector Vector{(Function, Expr)}
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
@@ -28,20 +29,18 @@ function Base.show(io::IO, q::Query; firstrow=true)
     end
 end
 
-Base.show(io::IO, q::Query) = show(io, q, firstrow=true)
-
 typealias CompositeQuery Vector{Query}
 
 function Base.show(io::IO, qs::CompositeQuery)
-    println("Query:")
-    prevq = None
+    println(length(qs), "Query:")
+    prevtype = None
     for q in qs
-        if q.qtype != prevq
-            show(q, firstrow=true)
+        if q.qtype != prevtype
+            show(io, q)
         else
-            show(q, firstrow=false)
+            show(io, q, firstrow=false)
         end
-        prevq = q.qtype
+        prevtype = q.qtype
     end
 end
 
@@ -121,11 +120,17 @@ end
     
 # Executing a query. Pipe through series of queries
 function query(cq::CompositeQuery, df)
+    newdf = copy(df) # query functions can mutate the dataframe.
     qfuncs = [query_function(q.qtype)(q) for q in cq]
     foldl(|>, df, qfuncs)
 end
 
-query(cq::CompositeQuery) = df::Queryable -> query(cq, df)
+query(qs::CompositeQuery) = df::Queryable -> query(qs, df)
+query(df::Queryable) = qs::CompositeQuery -> query(qs, df)
+
+# Pipe a dataframe into a set of queries.
+Base.|>(df::Queryable, qs::CompositeQuery) = query(qs, fd)
+
     
 # This macro returns a ParserVector type, which is a (Function, ColumnExpr) pair.  
 macro ?(exs...)
@@ -173,11 +178,11 @@ function parse_col_expression(ex::Expr, df::DataFrame)
         node
     end
     newex = copy(ex)
-    ex_type = classify_col_expression(newex)
+    extype = classify_col_expression(newex)
     
-    if is(ex_type, :columns)
+    if is(extype, :columns)
         Expr(:vcat, [QuoteNode(arg) for arg in ex.args]...)
-    elseif is(ex_type, :assignment)
+    elseif is(extype, :assignment)
         lhs, rhs = newex.args
         isa(lhs, Symbol) ? nothing:
             error("LHS of an assignment must be a valid column name.")
@@ -188,5 +193,6 @@ function parse_col_expression(ex::Expr, df::DataFrame)
         expand_column_refs(newex)
     end
 end
+
 
 end # module

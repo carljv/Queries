@@ -167,4 +167,22 @@ aggregate(assignment_vector::Vector{Expr}) =
 
 aggregate(assignments::Expr...) = aggregate([assignments...])
 
+### Some obsolete SHOW functions
+
+function Base.show(io::IO, qs::Vector{DFExpr})
+    println(length(qs), "-element Array{$(eltype(qs)), 1}:")
+    for q in qs
+        print(" ")
+        show(io::IO, q)
+    end
+end
+
+typealias QueryPair (Symbol, Vector{DFExpr})
+
+type Query
+    qps::Vector{QueryPair}
+end
+
+
+
 end #module
