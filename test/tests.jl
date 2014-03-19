@@ -30,12 +30,14 @@ q3 = q1 |> q2
 # Test 3 Test parsers
 ex1 = Q.parse_query_expression(:(x = 10), testdata)
 @assert ex1 == :(x = 10)
+?
+
+
+
+
 
 
 println("EVERYTHING PASSED!")
-
-
-
 
 # Test XX: Select and where
 #high_on_date = select(:High) |> where(:Date == "2004-09-01")

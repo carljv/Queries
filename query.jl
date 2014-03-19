@@ -1,198 +1,126 @@
-# --------------------------------------------------------------------------- #
-# Composable queries for Julia dataframes.                                    #
-#                                                                             #
-# C. Vogel       March 2014                                                   #
-# --------------------------------------------------------------------------- #
 module JQ
+
+
 using DataFrames
-export query, where, select, @?, show, parse_col_expression
+typealias ColExpr Union(Symbol, Expr, Vector{Symbol})
 
-
-typealias ColumnExpr Union(Symbol, Expr)
-typealias ParserVector Vector{(Function, Expr)}
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
 
-type Query
+immutable Query
+    query_type::Symbol
     parser::Function
-    ex::ColumnExpr
-    extype::Symbol
-    qtype::Symbol
+    ex::ColExpr
 end
 
-function Base.show(io::IO, q::Query; firstrow=true)
-    exmargin = length(string(q.qtype)) + 1
-    if firstrow
-        print("   ", uppercase(string(q.qtype))) 
-        print(" $(q.ex)\n")
-    else
-        println((" " ^ exmargin) * "$(q.ex)")
-    end
+macro where(exs...)
+    esc(:( [JQ.Query(:where,
+                     df -> eval(JQ.parse_where(ex, df)),
+                     ex) for ex in $exs] ))
 end
 
-typealias CompositeQuery Vector{Query}
-
-function Base.show(io::IO, qs::CompositeQuery)
-    println(length(qs), "Query:")
-    prevtype = None
-    for q in qs
-        if q.qtype != prevtype
-            show(io, q)
-        else
-            show(io, q, firstrow=false)
-        end
-        prevtype = q.qtype
-    end
+macro select(cols...)
+    esc(:( JQ.Query(:select,
+                    df -> eval(JQ.parse_select(collect($cols), df)),
+                    collect($cols)) ))
 end
 
-# Construct array of Query-s from a vector of query expressions.
-# This is a *CompositeQuery*.
-# qtype is one of :select, :where, :groupby, :aggregate, :sortby, etc.
-function make_queries(qs::ParserVector, qtype::Symbol)
-    [Query(q[1], q[2], classify_col_expression(q[2]), qtype) for q in qs]
+macro update(exs...)
+    esc(:( [JQ.Query(:update,
+                     df -> eval(JQ.parse_update(ex, df)),
+                     ex) for ex in $exs] ))
 end
 
-# Composing queries. |> just becomes a Vector append
-|>(cq1::CompositeQuery, cq2::CompositeQuery) = [cq1, cq2]
+macro sortby(cols...)
+    esc(:( JQ.Query(:sortby,
+                    df -> eval(JQ.parse_sortby(collect($cols), df)),
+                    collect($cols)) ))
+end
 
+macro groupby(cols...)
+    esc(:( JQ.Query(:groupby,
+                     df -> eval(JQ.parse_groupby(collect($cols), df)),
+                     collect($cols)) ))
+end
+
+macro aggregate(exs...)
+    esc(:( [JQ.Query(:aggregate,
+                     df -> eval(JQ.parse_aggregate(ex, df)),
+                     ex) for ex in $exs] ))
+end
+
+
+# Composition of Queries.
+Base.|>(q1::Union(Query, Vector{Query}), q2::Union(Query, Vector{Query})) = [q1, q2]
+
+
+# Executing a query
+function query(df::Queryable, qs::Vector{Query})
+    # Not all queryables implement copy().
+    newdf = try copy(df) catch df end
     
-# Query functions are thin wrappers around the Query type constructor.
-# TODO: Add checks that expressions are consistent with the query function.
-where(qs::ParserVector)              = make_queries(qs, :where)
-Base.select(qs::ParserVector)        = make_queries(qs, :select)
-update(qs::ParserVector)             = make_queries(qs, :update)
-sortby(qs::ParserVector)             = make_queries(qs, :sortby)
-DataFrames.groupby(qs::ParserVector) = make_queries(qs, :groupby)
-aggregate(qs::ParserVector)          = make_queries(qs, :aggregate)
-
-
-# Executable query functions (Query, Queryable) -> Queryable
-
-# where returns subset of rows
-function xwhere(q::Query, df::Queryable)
-    getindex(df, q.parser(df), names(df))
+    foldl(query, newdf, qs)
 end
 
-# Curried 
-xwhere(q::Query) = df::Queryable -> xwhere(q, df)
-
-# select returns subset of columns
-function xselect(q::Query, df::Queryable)
-    getindex(df, q.parser(df))
+function query(df::Queryable, q::Query)
+    q.parser(df)
 end
 
-# Curried
-xselect(q::Query) = df::Queryable -> xselect(q, df)    
+Base.|>(df::Queryable, qs::Union(Vector{Query}, Query)) = query(df, qs)
 
-# update adds columns or modifies existing ones
-function xupdate(q::Query, df::Queryable)
+
+#####
+# Column resolver. Returns a new expression with any symbols
+# that match columns in the Queryable substituted to fully-qualified
+# references to the Queryable's column.
+#####
+function resolve_columns(node::Expr, df::Queryable)
+    Expr(node.head, [resolve_columns(a, df) for a in node.args]...)
+end
+
+function resolve_columns(s::Symbol, df::Queryable)
+    newsym = s in names(df) ? Expr(:ref, df, QuoteNode(s)) : s 
+end
+
+resolve_columns(x, df::Queryable) = x
+
+
+#####
+# Query Parsers
+# Return a new expression which, when evaluated
+# transforms the Queryable according to the
+# associated query.
+#####
+function parse_where(ex::ColExpr, df::Queryable)
+    resolved_ex = resolve_columns(ex, df)
+    :(getindex($df, $resolved_ex, names($df)))
+end
+
+function parse_select(ex::ColExpr, df::Queryable)
+    :(getindex($df, $ex))
+end
+
+function parse_update(ex::ColExpr, df::Queryable)
+    lhs, rhs = ex.args
+    lhs = QuoteNode(lhs)
+    resolved_rhs = resolve_columns(rhs, df)
+    :(begin setindex!($df, $resolved_rhs, $lhs); $df end)
+end
+
+function parse_sortby(ex::ColExpr, df::Queryable)
+    :(getindex($df, sortperm(getindex($df, $ex)), names($df)))
+end
+
+function parse_groupby(ex::ColExpr, df::Queryable)
+    :(groupby($df, $ex))
+end
+
+function parse_aggregate(ex::ColExpr, df::Queryable)
     nothing
 end
-
-# Curried
-xupdate(q::Query) = df::Queryable -> xupdate(q, df)
-
-# Sortby arranges row
-function xsortby(q::Query, df::Queryable)
-        nothing
-end
-
-# Curried
-xsortby(q::Query) = df::Queryable -> xsortby(q, df)
-
-# Groupby and aggregate tk.
-function xgroupby(q::Query, df::Queryable)
-        nothing
-end
-
-function xaggregate(q::Query, df::Queryable)
-        nothing
-end
-
-function query_function(qtype::Symbol)
-    qmap = {:where     => xwhere,
-            :select    => xselect,
-            :update    => xupdate,
-            :sortby    => xsortby,
-            :groupby   => xgroupby,
-            :aggregate => xaggregate}
-    qmap[qtype]
-end
     
-# Executing a query. Pipe through series of queries
-function query(cq::CompositeQuery, df)
-    newdf = copy(df) # query functions can mutate the dataframe.
-    qfuncs = [query_function(q.qtype)(q) for q in cq]
-    foldl(|>, df, qfuncs)
-end
-
-query(qs::CompositeQuery) = df::Queryable -> query(qs, df)
-query(df::Queryable) = qs::CompositeQuery -> query(qs, df)
-
-# Pipe a dataframe into a set of queries.
-Base.|>(df::Queryable, qs::CompositeQuery) = query(qs, fd)
-
     
-# This macro returns a ParserVector type, which is a (Function, ColumnExpr) pair.  
-macro ?(exs...)
-    esc(:([(df -> eval(parse_col_expression(ex, df)), ex) for ex in $exs]))
-end
 
-function classify_col_expression(ex::Expr)
-    invalid_expr_error = () -> error("Not a valid query expression: $ex")
-    if isa(ex, Symbol)
-        :columns
-    elseif ex.head == :tuple || ex.head == :vcat
-        if all(map(typeof, ex.args) .== Symbol)
-            :columns
-        else
-            invalid_expr_error()
-        end
-    elseif ex.head == :(=)
-        if typeof(ex.args[1]) == Symbol
-            :assignment
-        else
-            invalid_expr_error()
-        end
-        
-    elseif ex.head in (:comparison, :call)
-        :conditional
-    else
-        invalid_expr_error()
-    end
-end
 
-function parse_col_expression(ex::Expr, df::DataFrame)
-    function expand_column_refs(node)
-        for (i, arg) in enumerate(node.args)
-            if isa(arg, Symbol)
-                if arg in names(df)
-                    expanded = Expr(:ref, df, QuoteNode(arg))
-                    setindex!(node.args, expanded, i)
-                end
-            elseif isa(arg, Expr)
-                expand_column_refs(arg)
-            else
-                continue
-            end
-        end
-        node
-    end
-    newex = copy(ex)
-    extype = classify_col_expression(newex)
-    
-    if is(extype, :columns)
-        Expr(:vcat, [QuoteNode(arg) for arg in ex.args]...)
-    elseif is(extype, :assignment)
-        lhs, rhs = newex.args
-        isa(lhs, Symbol) ? nothing:
-            error("LHS of an assignment must be a valid column name.")
-        # df[:newcol] = ... df[:oldcol1] ... df[:oldcol2] ....
-        # !!! This mutates the original DF.
-        Expr(:(=), Expr(:ref, df, QuoteNode(lhs)), expand_column_refs(newex))
-    else
-        expand_column_refs(newex)
-    end
-end
 
 
 end # module
