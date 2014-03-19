@@ -1,7 +1,7 @@
 JQ Module: Composable Queries for Julia DataFrames
 ==================================================
 C. Vogel
-*March 12, 2014*
+*March 19, 2014*
 
 
 - `query.jl`: Code for the JQ module.
