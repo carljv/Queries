@@ -1,10 +1,10 @@
 module JQ
-
-
+export @where, @select, @update, @sortby, @groupby, @aggregate, |>, map
 using DataFrames
-typealias ColExpr Union(Symbol, Expr, Vector{Symbol})
+typealias ColExpr Union(Symbol, Expr, Vector{Symbol}, Vector{Expr})
 
 typealias Queryable Union(AbstractDataFrame, GroupedDataFrame, GroupApplied)
+
 
 immutable Query
     query_type::Symbol
@@ -12,6 +12,14 @@ immutable Query
     ex::ColExpr
 end
 
+function Base.show(io::IO, q::Query)
+    print(io, uppercase(string(q.query_type)) * " ")
+    print(io, string(q.ex))
+end
+
+
+# NB: Allow multiple where expressions? Currently multiple exprs
+# as AND conditions.
 macro where(exs...)
     esc(:( [JQ.Query(:where,
                      df -> eval(JQ.parse_where(ex, df)),
@@ -43,20 +51,29 @@ macro groupby(cols...)
 end
 
 macro aggregate(exs...)
-    esc(:( [JQ.Query(:aggregate,
-                     df -> eval(JQ.parse_aggregate(ex, df)),
-                     ex) for ex in $exs] ))
+    esc(:( JQ.Query(:aggregate,
+                    function(dfs)
+                        # Get the keys
+                        keydf = dfs.parent[dfs.starts, dfs.cols]
+                        # Evaluate the aggregator over all the sub-dfs.
+                        aggdfs =
+                            map(df -> eval(JQ.parse_aggregate(collect($exs), df)), dfs)
+                        # Combine
+                        hcat(keydf, vcat(aggdfs.vals...))
+                     end,
+                     collect($exs))) )
 end
 
 
 # Composition of Queries.
-Base.|>(q1::Union(Query, Vector{Query}), q2::Union(Query, Vector{Query})) = [q1, q2]
+Base.|>(q1::Union(Query, Vector{Query}),
+        q2::Union(Query, Vector{Query})) = [q1, q2]
 
 
 # Executing a query
 function query(df::Queryable, qs::Vector{Query})
     # Not all queryables implement copy().
-    newdf = try copy(df) catch df end
+    newdf = try copy(df) catch(e) df end
     
     foldl(query, newdf, qs)
 end
@@ -81,8 +98,8 @@ function resolve_columns(s::Symbol, df::Queryable)
     newsym = s in names(df) ? Expr(:ref, df, QuoteNode(s)) : s 
 end
 
+# Fall-through; typically for literals: numbers, strings, etc.
 resolve_columns(x, df::Queryable) = x
-
 
 #####
 # Query Parsers
@@ -114,13 +131,22 @@ function parse_groupby(ex::ColExpr, df::Queryable)
     :(groupby($df, $ex))
 end
 
-function parse_aggregate(ex::ColExpr, df::Queryable)
-    nothing
+function parse_aggregate(exs::ColExpr, df::AbstractDataFrame)
+    # Aggregate takes assignment expressions.
+    # LHSs will be new variables, RHSs should be
+    # resolved against queried DataFrame
+    resolved_kwargs = [Expr(:kw, ex.args[1],
+                            resolve_columns(ex.args[2], df))
+                    for ex in exs]
+    Expr(:call, :DataFrame, resolved_kwargs...)            
+end
+
+
+function Base.map(q::Union(Vector{Query}, Query), dfs::Vector{DataFrame})
+    map(df -> df |> q, dfs)
 end
     
-    
-
-
-
-
 end # module
+
+
+    
